@@ -39,26 +39,22 @@ for proxy in proxies:
 site = "http://www.ipeen.com.tw"
 top_url = "http://www.ipeen.com.tw/taipei/channel/F"
 # cat_url = None
-cat_list = list()
-category = None
-categoryID = None
-page = None
 url_list = list()
-cc_list = list()    # comment content list
 
 
 def request_page(url):
     try:
         # pi = random.randint(0, 299)
         pi = 100
-        res = requests.get(url, headers=header, proxies=plist[pi])
+        x_url = url.split()[0]
+        res = requests.get(x_url, headers=header, proxies=plist[pi])
         res.encoding = "utf-8"
         return res
     except requests.exceptions.ConnectionError:
         pi = (pi + 1) % 300
         pi = (pi + 1) % 300
         # res.close()
-        res = requests.get(url, headers=header, proxies=plist[pi])
+        res = requests.get(x_url, headers=header, proxies=plist[pi])
         res.encoding = "utf-8"
         return res
     except requests.Timeout as e:
@@ -76,20 +72,47 @@ def request_page(url):
         sys.exit(1)
 
 
-def produce_comment(res):
+def write_comment(res, url):
+    # shop comment patterns:
+    # -----------------------------------
+    # pattern 1
+    # <p>...</p>
+    # <p>sdbsbasbssf</p>
+    # -----------------------------------
+    # pattern 2
+    # <div>...<div>
+    # <div>sfsjfkjsfjsl</div>
+    # -----------------------------------
+    # pattern 3
+    # <div>...</div>
+    #   <p>...</p>
+    #     <span>...</span>
+    #     <span>sjfjsfdsfjsjfsj</span>
+    # -----------------------------------
     html = BeautifulSoup(res.text, "lxml")
     # get one page of comment hyperlinks for certain shop
+    str_comment = ""
+    desc = html.find("div", {"class": "description"})
+    p_paras = desc.find_all_next(text=True)
 
-    # // *[ @ id = "comment"] / section / div / div[3] / div[1] / p[2] / span / text()
-    str_data = ""
-    article = html.find("div", {"class": "description"})
-    containers = article.find_all("p")
-    if containers is not None:
-        for container in containers:
-            str_data += container.text
+    # p_paras = desc.find_all("p")
+    for p_para in p_paras:
+        span_para = p_para.find_all("span")
+        for span in span_para:
+            span.extract()
+        b_para = p_para.find_all("b")
+        for b in b_para:
+            b.extract()
+        img_para = p_para.find_all("img")
+        for img in img_para:
+            img.extract()
 
-        str_data = '{ "comment": "' + str_data + '" }'
-        cc_list.append(str_data)
+        str_comment += p_para.get_text()
+
+    s_list = url.split()
+    str_data = '{ "shopObjectId": ' + s_list[1] + ', "name": ' + s_list[2] + ', "url": ' + s_list[0] + \
+               ', "commentContent": "' + str_comment + '" }'
+    col4.insert_one(json.loads(str_data))
 
 
 def scrap_shop(urls):
@@ -99,7 +122,7 @@ def scrap_shop(urls):
             url = future_obj[future]
             try:
                 res = future.result()
-                process_comment(res)
+                process_comment(res, url)
             except Exception as exc:
                 print('%r generated an exception: %s' % (url, exc))
 
@@ -111,7 +134,7 @@ def scrap_comment(urls):
             url = future_obj[future]
             try:
                 res = future.result()
-                produce_comment(res)
+                write_comment(res, url)
             except Exception as exc:
                 print('%r generated an exception: %s' % (url, exc))
 
@@ -137,22 +160,19 @@ def process_shop():
         time.sleep(2)
 
 
-def process_comment(res):
-    global cc_list
-
+def process_comment(res, url):
     html = BeautifulSoup(res.text, "lxml")
     # get one page of comment hyperlinks for certain shop
     containers = html.find_all("a", {"itemprop": "discussionUrl url"})
 
     comment_list = list()
     for container in containers:
-        comment_list.append(site + container["href"])
+        # comment_list = url + ObjectId + name
+        s_list = url.split()
+        t_str = site + container["href"] + " " + s_list[1] + " " + s_list[2]
+        comment_list.append(t_str)
 
     scrap_comment(comment_list)
-    for cc in cc_list:
-        col4.insert_one(json.loads(cc))
-
-    cc_list = list()
 
 
 if __name__ == "__main__":
@@ -163,15 +183,16 @@ if __name__ == "__main__":
         # get cursor from sitemap-3 with page number from 'b_page' to 'e_page'
         myQuery = {"page": {"$gte": b_page, "$lt": b_page + cursor_size}}
         results = list(col3.find(myQuery))
+        object_list = list()
+        name_list = list()
         url_list = list()
         if len(results) > 0:
             # process documents in cursor one by one
             for result in results:
-                # categoryID = result["categoryID"]
-                # category = result["category"]
-                # page = result["page"]
-                # populate url_list
-                url_list.append(site + result["comment"])
+                # populate url_list)
+                # url_list = url + ObjectId + name
+                tmp_str = site + result["comment"] + " " + str(result["_id"]) + " " + result["name"]
+                url_list.append(tmp_str)
 
             process_shop()
             b_page += cursor_size
